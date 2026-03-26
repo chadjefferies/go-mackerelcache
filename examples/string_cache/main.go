@@ -18,10 +18,12 @@ func main() {
 	})
 	defer client.Close()
 
-	// Create a string cache using the built-in helper method.
+	// Create a simple string cache using the built-in helper method.
 	stringCache := mackerelcache.NewStringCache(client)
 
-	// Notice we don't need to create a partition explicitly - it will be created on demand when we put a value with a new partition key.
+	// Notice we don't need to create a partition explicitly,
+	// it will be created implicitly when we put a value with a new partition key.
+
 	// First, let's delete any existing value for the key.
 	err = stringCache.Delete(ctx, "string_go_client", "abc123")
 	if err != nil {
@@ -39,6 +41,5 @@ func main() {
 	if err != nil {
 		fmt.Printf("failed to get value: %v\n", err)
 	}
-
 	fmt.Printf("Retrieved value: %s\n", value)
 }

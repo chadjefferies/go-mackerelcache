@@ -37,7 +37,17 @@ type Client struct {
 	conns   map[string]*grpc.ClientConn
 }
 
-func (c *Client) PutPartition(ctx context.Context, partition string, expiration time.Duration, expirationType pb.ExpirationType, persist bool, evictionPolicy pb.EvictionPolicy, maxCacheSize int64) error {
+type PartitionOptions struct {
+	Expiration     time.Duration
+	ExpirationType pb.ExpirationType
+	Persist        bool
+	EvictionPolicy pb.EvictionPolicy
+	MaxCacheSize   int64
+}
+
+// PutPartition creates a partition in the cache. If it already exists,
+// / it's updated, if it doesn't exist, a new partition is created.
+func (c *Client) PutPartition(ctx context.Context, partition string, opts PartitionOptions) error {
 	var wg sync.WaitGroup
 	l := len(c.clients)
 	errc := make(chan error, l)
@@ -48,11 +58,11 @@ func (c *Client) PutPartition(ctx context.Context, partition string, expiration 
 			defer wg.Done()
 			req := &pb.PutPartitionRequest{
 				PartitionKey:   partition,
-				Expiration:     durationpb.New(expiration),
-				Persist:        persist,
-				EvictionPolicy: evictionPolicy,
-				MaxCacheSize:   maxCacheSize,
-				ExpirationType: expirationType,
+				Expiration:     durationpb.New(opts.Expiration),
+				Persist:        opts.Persist,
+				EvictionPolicy: opts.EvictionPolicy,
+				MaxCacheSize:   opts.MaxCacheSize,
+				ExpirationType: opts.ExpirationType,
 			}
 			resp, err := client.PutPartition(ctx, req, defaultCallOpts...)
 			if err != nil {
@@ -79,8 +89,80 @@ func (c *Client) PutPartition(ctx context.Context, partition string, expiration 
 	return nil
 }
 
+// FlushPartition flushes all cache entries in the specified partition.
+func (c *Client) FlushPartition(ctx context.Context, partition string) error {
+	var wg sync.WaitGroup
+	l := len(c.clients)
+	errc := make(chan error, l)
+	wg.Add(l)
+
+	for _, client := range c.clients {
+		go func() {
+			defer wg.Done()
+			req := &pb.FlushPartitionRequest{
+				PartitionKey: partition,
+			}
+			_, err := client.FlushPartition(ctx, req, defaultCallOpts...)
+			if err != nil {
+				errc <- err
+				return
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+
+	errs := []error{}
+	for e := range errc {
+		errs = append(errs, e)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// DeletePartition deletes the specified partition and all cache entries in it.
+func (c *Client) DeletePartition(ctx context.Context, partition string) error {
+	var wg sync.WaitGroup
+	l := len(c.clients)
+	errc := make(chan error, l)
+	wg.Add(l)
+
+	for _, client := range c.clients {
+		go func() {
+			defer wg.Done()
+			req := &pb.DeletePartitionRequest{
+				PartitionKey: partition,
+			}
+			resp, err := client.DeletePartition(ctx, req, defaultCallOpts...)
+			if err != nil {
+				errc <- err
+				return
+			}
+			if resp.Result != pb.WriteResult_SUCCESS {
+				errc <- errors.New("failed to delete partition: " + resp.Result.String())
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+
+	errs := []error{}
+	for e := range errc {
+		errs = append(errs, e)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
 // Close closes the client, releasing any open resources.
-//
 // It is rare to Close a Client, as the Client is meant to be
 // long-lived and shared between many goroutines.
 func (c *Client) Close() error {
