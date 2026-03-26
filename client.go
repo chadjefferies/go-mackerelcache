@@ -27,15 +27,14 @@ var defaultCallOpts = []grpc.CallOption{
 	defaultMaxCallRecvMsgSize,
 }
 
-// Client represents a gRPC client for the MackerelCache service.
+// Client is a MackerelCache client representing a pool of zero or more underlying connections.
+// It's safe for concurrent use by multiple goroutines.
 type Client struct {
-	//Watcher
-	//Maintenance
-
+	Watcher
+	Maintenance
+	Cfg     *Config
 	clients map[string]pb.MackerelCacheServiceClient
 	conns   map[string]*grpc.ClientConn
-
-	Cfg Config
 }
 
 func (c *Client) PutPartition(ctx context.Context, partition string, expiration time.Duration, expirationType pb.ExpirationType, persist bool, evictionPolicy pb.EvictionPolicy, maxCacheSize int64) error {
@@ -57,12 +56,11 @@ func (c *Client) PutPartition(ctx context.Context, partition string, expiration 
 			}
 			resp, err := client.PutPartition(ctx, req, defaultCallOpts...)
 			if err != nil {
-				// TODO: log errors
 				errc <- err
+				return
 			}
 			if resp.Result != pb.WriteResult_SUCCESS {
-				// TODO: create more specific error types
-				errc <- fmt.Errorf("failed to put partition: %v", resp.Result)
+				errc <- errors.New("failed to put partition: " + resp.Result.String())
 			}
 		}()
 	}
@@ -81,6 +79,10 @@ func (c *Client) PutPartition(ctx context.Context, partition string, expiration 
 	return nil
 }
 
+// Close closes the client, releasing any open resources.
+//
+// It is rare to Close a Client, as the Client is meant to be
+// long-lived and shared between many goroutines.
 func (c *Client) Close() error {
 	// c.cancel()
 	// if c.Watcher != nil {
@@ -96,18 +98,12 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) NewStringCache() Cache[string] {
-	return &cache[string]{client: c, router: NewKeyRouter(), codec: &StringCodec[string]{}, nodes: c.Cfg.Endpoints}
-}
-
-func (c *Client) NewBinaryCache() Cache[[]byte] {
-	return &cache[[]byte]{client: c, router: NewKeyRouter(), codec: &BinaryCodec[[]byte]{}, nodes: c.Cfg.Endpoints}
-}
-
-// New creates a new client instance
-func New(conf Config) (*Client, error) {
+// NewClient creates a new MackerelCache client instance
+func NewClient(conf *Config) (*Client, error) {
 	conns := make(map[string]*grpc.ClientConn)
 	clients := make(map[string]pb.MackerelCacheServiceClient)
+	maintClients := make(map[string]pb.MaintenanceServiceClient)
+	watchClients := make(map[string]pb.WatchServiceClient)
 
 	for _, endpoint := range conf.Endpoints {
 		if endpoint == "" {
@@ -137,16 +133,19 @@ func New(conf Config) (*Client, error) {
 		}
 		conns[endpoint] = conn
 		clients[endpoint] = pb.NewMackerelCacheServiceClient(conn)
+		maintClients[endpoint] = pb.NewMaintenanceServiceClient(conn)
+		watchClients[endpoint] = pb.NewWatchServiceClient(conn)
 	}
 
-	return newClient(conns, clients, conf), nil
+	return newClient(conns, clients, maintClients, watchClients, conf), nil
 }
 
-// newClient creates a new client instance
-func newClient(conns map[string]*grpc.ClientConn, clients map[string]pb.MackerelCacheServiceClient, conf Config) *Client {
+func newClient(conns map[string]*grpc.ClientConn, clients map[string]pb.MackerelCacheServiceClient, maintClients map[string]pb.MaintenanceServiceClient, watchClients map[string]pb.WatchServiceClient, conf *Config) *Client {
 	return &Client{
-		conns:   conns,
-		clients: clients,
-		Cfg:     conf,
+		conns:       conns,
+		clients:     clients,
+		Cfg:         conf,
+		Maintenance: &maintenance{clients: maintClients},
+		Watcher:     &watcher{clients: watchClients},
 	}
 }
