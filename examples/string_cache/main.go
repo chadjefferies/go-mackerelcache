@@ -12,7 +12,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Create client
+	// Create a MackerelCache client assuming three cache nodes running on localhost with ports 11211, 11212, and 11213.
 	client, err := mackerelcache.New(mackerelcache.Config{
 		Endpoints: []string{"localhost:11211", "localhost:11212", "localhost:11213"},
 		Timeout:   10 * time.Second,
@@ -23,20 +23,24 @@ func main() {
 		}
 	}()
 
-	stringCache := mackerelcache.NewStringCache(client)
+	// Create a string cache using the built-in helper method.
+	stringCache := client.NewStringCache()
 
-	err = stringCache.Delete(ctx, "go_client", "abc123")
+	// Notice we don't need to create a partition explicitly - it will be created on demand when we put a value with a new partition key.
+	// First, let's delete any existing value for the key.
+	err = stringCache.Delete(ctx, "string_go_client", "abc123")
 	if err != nil {
 		fmt.Printf("failed to delete value: %v", err)
 	}
 
-	err = stringCache.Put(ctx, "go_client", "abc123", "val")
-
+	// Write the value to the cache
+	err = stringCache.Put(ctx, "string_go_client", "abc123", "val")
 	if err != nil {
 		fmt.Printf("failed to create client: %v", err)
 	}
 
-	value, err := stringCache.Get(ctx, "go_client", "abc123")
+	// Retrieve the value from the cache
+	value, err := stringCache.Get(ctx, "string_go_client", "abc123")
 	if err != nil {
 		fmt.Printf("failed to get value: %v", err)
 	}

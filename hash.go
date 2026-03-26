@@ -1,4 +1,4 @@
-package routing
+package mackerelcache
 
 import (
 	jump "github.com/lithammer/go-jump-consistent-hash"

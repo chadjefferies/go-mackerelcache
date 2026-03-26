@@ -38,7 +38,7 @@ type Client struct {
 	Cfg Config
 }
 
-func (c *Client) PutPartition(ctx context.Context, partition string, expiration time.Duration, persist bool, evictionPolicy pb.EvictionPolicy, maxCacheSize int64) error {
+func (c *Client) PutPartition(ctx context.Context, partition string, expiration time.Duration, expirationType pb.ExpirationType, persist bool, evictionPolicy pb.EvictionPolicy, maxCacheSize int64) error {
 	var wg sync.WaitGroup
 	l := len(c.clients)
 	errc := make(chan error, l)
@@ -53,6 +53,7 @@ func (c *Client) PutPartition(ctx context.Context, partition string, expiration 
 				Persist:        persist,
 				EvictionPolicy: evictionPolicy,
 				MaxCacheSize:   maxCacheSize,
+				ExpirationType: expirationType,
 			}
 			resp, err := client.PutPartition(ctx, req, defaultCallOpts...)
 			if err != nil {
@@ -93,6 +94,14 @@ func (c *Client) Close() error {
 	}
 	// return c.ctx.Err()
 	return nil
+}
+
+func (c *Client) NewStringCache() Cache[string] {
+	return &cache[string]{client: c, router: NewKeyRouter(), codec: &StringCodec[string]{}, nodes: c.Cfg.Endpoints}
+}
+
+func (c *Client) NewBinaryCache() Cache[[]byte] {
+	return &cache[[]byte]{client: c, router: NewKeyRouter(), codec: &BinaryCodec[[]byte]{}, nodes: c.Cfg.Endpoints}
 }
 
 // New creates a new client instance
