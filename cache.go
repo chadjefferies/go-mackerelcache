@@ -17,6 +17,14 @@ type Cache[T any] interface {
 	// PutMany sets a collection of key-value pairs in the cache. If they already exist,
 	// they are updated, if they don't exist, new entries are created.
 	PutMany(ctx context.Context, partition string, items map[string]T) error
+	// PutIfExists sets a key-value in the cache only if the key already exists.
+	PutIfExists(ctx context.Context, partition, key string, value T) error
+	// PutIfExistsMany sets a collection of key-value pairs in the cache only if the keys already exist.
+	PutIfExistsMany(ctx context.Context, partition string, items map[string]T) error
+	// PutIfNotExists sets a key-value in the cache only if the key does not already exist.
+	PutIfNotExists(ctx context.Context, partition, key string, value T) error
+	// PutIfNotExistsMany sets a collection of key-value pairs in the cache only if the keys do not already exist.
+	PutIfNotExistsMany(ctx context.Context, partition string, items map[string]T) error
 	// Get gets the value in the cache at the specified key.
 	Get(ctx context.Context, partition, key string) (T, error)
 	// GetMany gets the values in the cache at the specified keys.
@@ -101,6 +109,146 @@ func (c *cache[T]) PutMany(ctx context.Context, partition string, items map[stri
 				Entries:      entries,
 			}
 			resp, err := c.client.clients[node].PutMany(ctx, req, defaultCallOpts...)
+			if err != nil {
+				errc <- err
+			} else {
+				if resp.Result != pb.WriteResult_SUCCESS {
+					errc <- errors.New("failed to put values: " + resp.Result.String())
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+
+	errs := []error{}
+	for e := range errc {
+		errs = append(errs, e)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+func (c *cache[T]) PutIfExists(ctx context.Context, partition, key string, value T) error {
+	ctx, cancel := context.WithTimeout(ctx, c.client.Cfg.Timeout)
+	defer cancel()
+
+	ctx = withRoutingValues(ctx, partition, key)
+	node := c.router.Route(ctx, c.nodes)
+	encodedVal, err := c.codec.Encode(value)
+	if err != nil {
+		return err
+	}
+	req := &pb.PutIfExistsRequest{
+		PartitionKey: partition,
+		Key:          key,
+		Value:        encodedVal,
+	}
+	resp, err := c.client.clients[node].PutIfExists(ctx, req, defaultCallOpts...)
+	if err != nil {
+		return err
+	}
+	if resp.Result != pb.WriteResult_SUCCESS {
+		return errors.New("failed to put value: " + resp.Result.String())
+	}
+	return err
+}
+
+func (c *cache[T]) PutIfExistsMany(ctx context.Context, partition string, items map[string]T) error {
+	ctx, cancel := context.WithTimeout(ctx, c.client.Cfg.Timeout)
+	defer cancel()
+
+	itemMap, err := c.routeItemsToNode(ctx, partition, items)
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	l := len(itemMap)
+	errc := make(chan error, l)
+	wg.Add(l)
+	for node, entries := range itemMap {
+		go func() {
+			defer wg.Done()
+			req := &pb.PutIfExistsManyRequest{
+				PartitionKey: partition,
+				Entries:      entries,
+			}
+			resp, err := c.client.clients[node].PutIfExistsMany(ctx, req, defaultCallOpts...)
+			if err != nil {
+				errc <- err
+			} else {
+				if resp.Result != pb.WriteResult_SUCCESS {
+					errc <- errors.New("failed to put values: " + resp.Result.String())
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+
+	errs := []error{}
+	for e := range errc {
+		errs = append(errs, e)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+func (c *cache[T]) PutIfNotExists(ctx context.Context, partition, key string, value T) error {
+	ctx, cancel := context.WithTimeout(ctx, c.client.Cfg.Timeout)
+	defer cancel()
+
+	ctx = withRoutingValues(ctx, partition, key)
+	node := c.router.Route(ctx, c.nodes)
+	encodedVal, err := c.codec.Encode(value)
+	if err != nil {
+		return err
+	}
+	req := &pb.PutIfNotExistsRequest{
+		PartitionKey: partition,
+		Key:          key,
+		Value:        encodedVal,
+	}
+	resp, err := c.client.clients[node].PutIfNotExists(ctx, req, defaultCallOpts...)
+	if err != nil {
+		return err
+	}
+	if resp.Result != pb.WriteResult_SUCCESS {
+		return errors.New("failed to put value: " + resp.Result.String())
+	}
+	return err
+}
+
+func (c *cache[T]) PutIfNotExistsMany(ctx context.Context, partition string, items map[string]T) error {
+	ctx, cancel := context.WithTimeout(ctx, c.client.Cfg.Timeout)
+	defer cancel()
+
+	itemMap, err := c.routeItemsToNode(ctx, partition, items)
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	l := len(itemMap)
+	errc := make(chan error, l)
+	wg.Add(l)
+	for node, entries := range itemMap {
+		go func() {
+			defer wg.Done()
+			req := &pb.PutIfNotExistsManyRequest{
+				PartitionKey: partition,
+				Entries:      entries,
+			}
+			resp, err := c.client.clients[node].PutIfNotExistsMany(ctx, req, defaultCallOpts...)
 			if err != nil {
 				errc <- err
 			} else {
