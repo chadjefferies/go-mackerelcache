@@ -46,8 +46,11 @@ type PartitionOptions struct {
 }
 
 // PutPartition creates a partition in the cache. If it already exists,
-// / it's updated, if it doesn't exist, a new partition is created.
+// it's updated, if it doesn't exist, a new partition is created.
 func (c *Client) PutPartition(ctx context.Context, partition string, opts PartitionOptions) error {
+	ctx, cancel := context.WithTimeout(ctx, c.Cfg.Timeout)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	l := len(c.clients)
 	errc := make(chan error, l)
@@ -91,6 +94,9 @@ func (c *Client) PutPartition(ctx context.Context, partition string, opts Partit
 
 // FlushPartition flushes all cache entries in the specified partition.
 func (c *Client) FlushPartition(ctx context.Context, partition string) error {
+	ctx, cancel := context.WithTimeout(ctx, c.Cfg.Timeout)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	l := len(c.clients)
 	errc := make(chan error, l)
@@ -126,6 +132,9 @@ func (c *Client) FlushPartition(ctx context.Context, partition string) error {
 
 // DeletePartition deletes the specified partition and all cache entries in it.
 func (c *Client) DeletePartition(ctx context.Context, partition string) error {
+	ctx, cancel := context.WithTimeout(ctx, c.Cfg.Timeout)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	l := len(c.clients)
 	errc := make(chan error, l)
@@ -144,6 +153,42 @@ func (c *Client) DeletePartition(ctx context.Context, partition string) error {
 			}
 			if resp.Result != pb.WriteResult_SUCCESS {
 				errc <- errors.New("failed to delete partition: " + resp.Result.String())
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+
+	errs := []error{}
+	for e := range errc {
+		errs = append(errs, e)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// FlushAll clears all data from the cache.
+func (c *Client) FlushAll(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, c.Cfg.Timeout)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	l := len(c.clients)
+	errc := make(chan error, l)
+	wg.Add(l)
+
+	for _, client := range c.clients {
+		go func() {
+			defer wg.Done()
+			req := &pb.FlushAllRequest{}
+			_, err := client.FlushAll(ctx, req, defaultCallOpts...)
+			if err != nil {
+				errc <- err
+				return
 			}
 		}()
 	}
@@ -195,10 +240,14 @@ func NewClient(conf *Config) (*Client, error) {
 		var opts []grpc.DialOption
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
-		opts = append(opts, grpc.WithDefaultCallOptions(
-			defaultMaxCallRecvMsgSize,
-			defaultMaxCallSendMsgSize,
-		))
+		if len(conf.DialOptions) > 0 {
+			opts = append(opts, conf.DialOptions...)
+		} else {
+			opts = append(opts, grpc.WithDefaultCallOptions(
+				defaultMaxCallRecvMsgSize,
+				defaultMaxCallSendMsgSize,
+			))
+		}
 
 		// retry, err := config.RetryDialOption("mackerelcachepb.MackerelCacheService", conf.RetryPolicy)
 		// if err == nil {
@@ -227,7 +276,7 @@ func newClient(conns map[string]*grpc.ClientConn, clients map[string]pb.Mackerel
 		conns:       conns,
 		clients:     clients,
 		Cfg:         conf,
-		Maintenance: &maintenance{clients: maintClients},
+		Maintenance: &maintenance{clients: maintClients, cfg: conf},
 		Watcher:     &watcher{clients: watchClients},
 	}
 }

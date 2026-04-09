@@ -32,9 +32,7 @@ type Config struct {
 	// Make sure that "MaxCallRecvMsgSize" >= server-side default send/recv limit.
 	MaxCallRecvMsgSize int
 
-	// DialOptions is a list of dial options for the grpc client (e.g., for interceptors).
-	// Note that grpc.NewClient ignores options that are specific to grpc.Dial such as
-	// "grpc.WithBlock()". Use DialTimeout to bound client initialization time.
+	// DialOptions is a list of dial options for the grpc client.
 	DialOptions []grpc.DialOption
 
 	// Context is the default client context; it can be used to cancel grpc dial out and
